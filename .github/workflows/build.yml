@@ -1,481 +1,113 @@
-name: Build ApexPip AI v3.0
+name: Build Android APK
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
-  workflow_dispatch:
+      - master
 
 permissions:
-  contents: write
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  contents: read
 
 jobs:
   build:
-    name: Build ApexPip AI v3.0
     runs-on: ubuntu-latest
 
     steps:
-
-      # 1. Checkout repository
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
 
-      # 2. Check API key
-      - name: Check Twelve Data API key
-        env:
-          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Make Gradle wrapper executable
+        working-directory: app_project
+        run: chmod +x gradlew
+
+      - name: Find MainActivity.kt
+        working-directory: app_project
+        shell: bash
         run: |
-          if [ -z "$TWELVE_DATA_API_KEY" ]; then
-            echo "ERROR: TWELVE_DATA_API_KEY secret is missing."
-            exit 1
-          fi
-          echo "Twelve Data API key detected."
+          echo "Searching for MainActivity.kt..."
 
-      # 3. Extract original Android project
-      - name: Extract Android project
-        run: |
-          rm -rf app_project
-          mkdir -p app_project
-
-          if [ ! -f "PipPilotAI_Android_Project.zip" ]; then
-            echo "ERROR: PipPilotAI_Android_Project.zip not found."
-            exit 1
-          fi
-
-          unzip -o PipPilotAI_Android_Project.zip -d app_project
-
-          echo "Android project extracted."
-
-      # 4. Locate Android project
-      - name: Locate Android project
-        id: locate
-        run: |
-          GRADLE_FILE=$(find app_project -type f -path "*/app/build.gradle" | head -1)
-
-          if [ -z "$GRADLE_FILE" ]; then
-            echo "ERROR: app/build.gradle not found."
-            find app_project -type f | sort
-            exit 1
-          fi
-
-          APP_DIR=$(dirname "$(dirname "$GRADLE_FILE")")
-
-          echo "GRADLE_FILE=$GRADLE_FILE" >> "$GITHUB_OUTPUT"
-          echo "APP_DIR=$APP_DIR" >> "$GITHUB_OUTPUT"
-
-          echo "Gradle file: $GRADLE_FILE"
-          echo "App directory: $APP_DIR"
-
-      # 5. Configure Android project
-      - name: Configure Android project
-        env:
-          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
-        run: |
-          APP_DIR="${{ steps.locate.outputs.APP_DIR }}"
-          GRADLE_FILE="${{ steps.locate.outputs.GRADLE_FILE }}"
-
-          # Add OkHttp for WebSocket live market data
-          if ! grep -q "com.squareup.okhttp3:okhttp" "$GRADLE_FILE"; then
-            python3 - "$GRADLE_FILE" <<'PY'
-          import sys
-
-          path = sys.argv[1]
-
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
-
-          dependency = "implementation 'com.squareup.okhttp3:okhttp:4.12.0'"
-
-          if "dependencies {" in text:
-              text = text.replace(
-                  "dependencies {",
-                  "dependencies {\n    " + dependency,
-                  1
-              )
-          else:
-              text += "\n\ndependencies {\n    " + dependency + "\n}\n"
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-          PY
-          fi
-
-          # Enable BuildConfig
-          cat >> "$GRADLE_FILE" <<'EOF'
-
-          android {
-              buildFeatures {
-                  buildConfig true
-              }
-          }
-          EOF
-
-          # Java 17 / Kotlin 17
-          cat >> "$GRADLE_FILE" <<'EOF'
-
-          android {
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-
-              kotlinOptions {
-                  jvmTarget = '17'
-              }
-          }
-          EOF
-
-          # API key
-          cat >> "$GRADLE_FILE" <<'EOF'
-
-          android {
-              defaultConfig {
-                  buildConfigField "String", "TWELVE_DATA_API_KEY", "\"PLACEHOLDER_API_KEY\""
-              }
-          }
-          EOF
-
-          # Inject API key from GitHub Secret
-          python3 - "$GRADLE_FILE" "$TWELVE_DATA_API_KEY" <<'PY'
-          import sys
-
-          path = sys.argv[1]
-          api_key = sys.argv[2]
-
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
-
-          safe_key = api_key.replace("\\", "\\\\").replace('"', '\\"')
-
-          text = text.replace(
-              '"PLACEHOLDER_API_KEY"',
-              '"' + safe_key + '"'
-          )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-          PY
-
-          # Find manifest
-          MANIFEST=$(find "$APP_DIR" -name AndroidManifest.xml | head -1)
-
-          if [ -z "$MANIFEST" ]; then
-            echo "ERROR: AndroidManifest.xml not found."
-            exit 1
-          fi
-
-          # Add INTERNET permission safely
-          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
-            python3 - "$MANIFEST" <<'PY'
-          import sys
-
-          path = sys.argv[1]
-
-          with open(path, "r", encoding="utf-8") as f:
-              text = f.read()
-
-          marker = "<uses-permission android:name=\"android.permission.INTERNET\" />"
-
-          text = text.replace(
-              "<manifest",
-              "<manifest",
-              1
-          )
-
-          insert_pos = text.find(">")
-
-          if insert_pos != -1:
-              text = (
-                  text[:insert_pos + 1]
-                  + "\n    "
-                  + marker
-                  + text[insert_pos + 1:]
-              )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(text)
-          PY
-          fi
-
-          echo "Android project configured."
-
-      # 6. Create ApexPip AI live MainActivity
-      - name: Create ApexPip AI MainActivity
-        run: |
-          APP_DIR="${{ steps.locate.outputs.APP_DIR }}"
-
-          MAIN_ACTIVITY=$(find "$APP_DIR/src/main/java" "$APP_DIR/src/main/kotlin" \
-            -type f -name "MainActivity.kt" 2>/dev/null | head -1)
+          MAIN_ACTIVITY=$(find . \
+            -type f \
+            -name "MainActivity.kt" \
+            -not -path "./.gradle/*" \
+            -not -path "./build/*" \
+            | head -n 1)
 
           if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity.kt not found."
+            echo "ERROR: MainActivity.kt not found anywhere inside app_project."
+            echo ""
+            echo "Android source files found:"
+            find . -type f \( -name "*.kt" -o -name "*.java" \) \
+              -not -path "./.gradle/*" \
+              | sort
             exit 1
           fi
 
-          PACKAGE_NAME=$(grep -m1 '^package ' "$MAIN_ACTIVITY" \
-            | sed 's/package //' \
-            | tr -d '\r')
+          echo "MainActivity.kt found at:"
+          echo "$MAIN_ACTIVITY"
 
-          if [ -z "$PACKAGE_NAME" ]; then
-            PACKAGE_NAME="com.pippilot.ai"
+          echo "MAIN_ACTIVITY=$MAIN_ACTIVITY" >> "$GITHUB_ENV"
+
+      - name: Show Android project structure
+        working-directory: app_project
+        run: |
+          echo "Project files:"
+          find . -maxdepth 5 -type f \
+            -not -path "./.gradle/*" \
+            -not -path "./build/*" \
+            | sort | head -300
+
+      - name: Check Gradle project
+        working-directory: app_project
+        run: |
+          echo "Gradle version:"
+          ./gradlew --version
+
+      - name: Build Debug APK
+        working-directory: app_project
+        run: |
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Find generated APK
+        working-directory: app_project
+        shell: bash
+        run: |
+          echo "Searching for generated APK..."
+
+          APK=$(find . \
+            -type f \
+            -name "*.apk" \
+            -not -path "./.gradle/*" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK was generated."
+            echo ""
+            echo "Build directory contents:"
+            find . -type f \
+              -not -path "./.gradle/*" \
+              | sort | tail -200
+            exit 1
           fi
 
-          echo "Package: $PACKAGE_NAME"
+          echo "APK found:"
+          echo "$APK"
 
-          cat > "$MAIN_ACTIVITY" <<EOF
-          package $PACKAGE_NAME
+          mkdir -p ../artifacts
+          cp "$APK" ../artifacts/app-debug.apk
 
-          import android.app.Activity
-          import android.os.Bundle
-          import android.os.Handler
-          import android.os.Looper
-          import android.graphics.Color
-          import android.graphics.Typeface
-          import android.view.Gravity
-          import android.widget.LinearLayout
-          import android.widget.TextView
-          import okhttp3.OkHttpClient
-          import okhttp3.Request
-          import okhttp3.WebSocket
-          import okhttp3.WebSocketListener
-          import org.json.JSONObject
-          import java.util.Locale
-
-          class MainActivity : Activity() {
-
-              private lateinit var priceText: TextView
-              private lateinit var statusText: TextView
-              private lateinit var signalText: TextView
-              private lateinit var symbolText: TextView
-              private lateinit var timeText: TextView
-
-              private val client = OkHttpClient()
-              private var webSocket: WebSocket? = null
-
-              private val handler = Handler(Looper.getMainLooper())
-
-              private val reconnectRunnable = Runnable {
-                  connectToMarket()
-              }
-
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-
-                  buildInterface()
-                  connectToMarket()
-              }
-
-              private fun buildInterface() {
-
-                  val root = LinearLayout(this)
-
-                  root.orientation = LinearLayout.VERTICAL
-                  root.gravity = Gravity.CENTER_HORIZONTAL
-
-                  root.setPadding(
-                      28,
-                      40,
-                      28,
-                      28
-                  )
-
-                  root.setBackgroundColor(
-                      Color.rgb(5, 7, 13)
-                  )
-
-                  titleView(
-                      "APEXPIP AI",
-                      30f
-                  ).also {
-                      root.addView(it)
-                  }
-
-                  val creator = titleView(
-                      "Made by Thabiso Khutlane",
-                      14f
-                  )
-
-                  creator.setTextColor(
-                      Color.LTGRAY
-                  )
-
-                  root.addView(creator)
-
-                  symbolText = titleView(
-                      "EUR/USD",
-                      24f
-                  )
-
-                  symbolText.setPadding(
-                      0,
-                      40,
-                      0,
-                      10
-                  )
-
-                  root.addView(symbolText)
-
-                  statusText = titleView(
-                      "CONNECTING TO LIVE MARKET...",
-                      15f
-                  )
-
-                  statusText.setTextColor(
-                      Color.YELLOW
-                  )
-
-                  root.addView(statusText)
-
-                  priceText = titleView(
-                      "--.-----",
-                      42f
-                  )
-
-                  priceText.setPadding(
-                      0,
-                      35,
-                      0,
-                      35
-                  )
-
-                  root.addView(priceText)
-
-                  signalText = titleView(
-                      "WAITING FOR LIVE DATA",
-                      20f
-                  )
-
-                  signalText.setTextColor(
-                      Color.rgb(31, 230, 138)
-                  )
-
-                  signalText.setPadding(
-                      0,
-                      20,
-                      0,
-                      20
-                  )
-
-                  root.addView(signalText)
-
-                  timeText = titleView(
-                      "Live feed initializing...",
-                      13f
-                  )
-
-                  timeText.setTextColor(
-                      Color.GRAY
-                  )
-
-                  root.addView(timeText)
-
-                  setContentView(root)
-              }
-
-              private fun titleView(
-                  text: String,
-                  size: Float
-              ): TextView {
-
-                  val view = TextView(this)
-
-                  view.text = text
-                  view.textSize = size
-                  view.setTextColor(Color.WHITE)
-                  view.gravity = Gravity.CENTER
-
-                  if (size >= 24f) {
-                      view.setTypeface(
-                          null,
-                          Typeface.BOLD
-                      )
-                  }
-
-                  return view
-              }
-
-              private fun connectToMarket() {
-
-                  val apiKey =
-                      BuildConfig.TWELVE_DATA_API_KEY
-
-                  if (
-                      apiKey.isBlank() ||
-                      apiKey == "PLACEHOLDER_API_KEY"
-                  ) {
-
-                      statusText.text =
-                          "API KEY NOT CONFIGURED"
-
-                      statusText.setTextColor(
-                          Color.RED
-                      )
-
-                      signalText.text =
-                          "CHECK GITHUB SECRET"
-
-                      return
-                  }
-
-                  runOnUiThread {
-
-                      statusText.text =
-                          "CONNECTING TO TWELVE DATA..."
-
-                      statusText.setTextColor(
-                          Color.YELLOW
-                      )
-                  }
-
-                  val request =
-                      Request.Builder()
-                          .url(
-                              "wss://ws.twelvedata.com/v1/quotes/price?apikey=\$apiKey"
-                          )
-                          .build()
-
-                  webSocket = client.newWebSocket(
-                      request,
-                      object : WebSocketListener() {
-
-                          override fun onOpen(
-                              webSocket: WebSocket,
-                              response: okhttp3.Response
-                          ) {
-
-                              runOnUiThread {
-
-                                  statusText.text =
-                                      "● LIVE MARKET DATA"
-
-                                  statusText.setTextColor(
-                                      Color.rgb(
-                                          31,
-                                          230,
-                                          138
-                                      )
-                                  )
-                              }
-
-                              val subscribe =
-                                  JSONObject()
-
-                              subscribe.put(
-                                  "action",
-                                  "subscribe"
-                              )
-
-                              val params =
-                                  JSONObject()
-
-                              params.put(
-                                  "symbols",
-                                  "EUR/USD"
-                              )
-
-                              subscribe.put(
-                                  "params",
-                                 
+      - name: Upload APK
+        uses: actions/upload-artifact@v5
+        with:
+          name: Android-APK
+          path: artifacts/app-debug.apk
+          if-no-files-found: error
