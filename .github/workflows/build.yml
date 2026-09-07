@@ -1,0 +1,807 @@
+name: Build ApexPip AI v3.0
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # --------------------------------------------------
+      # 1. Checkout repository
+      # --------------------------------------------------
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      # --------------------------------------------------
+      # 2. Check API key
+      # --------------------------------------------------
+      - name: Check market API secret
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+        run: |
+          if [ -z "$TWELVE_DATA_API_KEY" ]; then
+            echo "ERROR: TWELVE_DATA_API_KEY secret is missing."
+            echo "Go to Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          echo "Market API secret detected."
+
+      # --------------------------------------------------
+      # 3. Extract original Android project
+      # --------------------------------------------------
+      - name: Extract Android project
+        run: |
+          rm -rf app_project
+
+          mkdir -p app_project
+
+          unzip -q PipPilotAI_Android_Project.zip \
+            -d app_project
+
+          echo "Extracted project:"
+          find app_project -maxdepth 4 -type f | sort
+
+      # --------------------------------------------------
+      # 4. Find Android app directory
+      # --------------------------------------------------
+      - name: Locate Android app
+        run: |
+          APP_GRADLE=$(find app_project \
+            -path "*/app/build.gradle" \
+            -type f \
+            | head -n 1)
+
+          if [ -z "$APP_GRADLE" ]; then
+            echo "ERROR: app/build.gradle was not found."
+            exit 1
+          fi
+
+          APP_DIR=$(dirname "$APP_GRADLE")
+
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+
+          echo "Android app directory:"
+          echo "$APP_DIR"
+
+      # --------------------------------------------------
+      # 5. Upgrade Gradle dependency
+      # --------------------------------------------------
+      - name: Add live market dependencies
+        run: |
+          cat >> "$APP_DIR/build.gradle" <<'EOF'
+
+          dependencies {
+              implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+          }
+          EOF
+
+      # --------------------------------------------------
+      # 6. Force Java/Kotlin 17
+      # --------------------------------------------------
+      - name: Force Java and Kotlin JVM 17
+        run: |
+          cat >> "$APP_DIR/build.gradle" <<'EOF'
+
+          android {
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+          EOF
+
+      # --------------------------------------------------
+      # 7. Add INTERNET permission
+      # --------------------------------------------------
+      - name: Enable internet access
+        run: |
+          MANIFEST=$(find "$APP_DIR/src/main" \
+            -name "AndroidManifest.xml" \
+            -type f \
+            | head -n 1)
+
+          if [ -z "$MANIFEST" ]; then
+            echo "ERROR: AndroidManifest.xml not found."
+            exit 1
+          fi
+
+          sed -i '/<manifest/i\
+          ' "$MANIFEST" || true
+
+          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
+            sed -i '/<manifest[^>]*>/a\
+              <uses-permission android:name="android.permission.INTERNET" />' "$MANIFEST"
+          fi
+
+          echo "Updated manifest:"
+          cat "$MANIFEST"
+
+      # --------------------------------------------------
+      # 8. Create premium ApexPip background
+      # --------------------------------------------------
+      - name: Create ApexPip background
+        run: |
+          mkdir -p "$APP_DIR/src/main/res/drawable"
+
+          cat > "$APP_DIR/src/main/res/drawable/apexpip_background.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <item>
+                  <shape android:shape="rectangle">
+                      <gradient
+                          android:angle="270"
+                          android:startColor="#05070A"
+                          android:centerColor="#0A1017"
+                          android:endColor="#020304" />
+                  </shape>
+              </item>
+
+              <item
+                  android:top="80dp"
+                  android:left="24dp"
+                  android:right="24dp">
+
+                  <shape android:shape="rectangle">
+
+                      <corners android:radius="28dp" />
+
+                      <gradient
+                          android:angle="0"
+                          android:startColor="#101A22"
+                          android:endColor="#07100D" />
+
+                      <stroke
+                          android:width="1dp"
+                          android:color="#263A35" />
+
+                  </shape>
+
+              </item>
+
+          </layer-list>
+          EOF
+
+      # --------------------------------------------------
+      # 9. Create robot launcher icon
+      # --------------------------------------------------
+      - name: Create ApexPip robot icon
+        run: |
+          mkdir -p "$APP_DIR/src/main/res/drawable"
+
+          cat > "$APP_DIR/src/main/res/drawable/ic_apexpip_robot.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+
+              <path
+                  android:fillColor="#05070A"
+                  android:pathData="M0,0h108v108h-108z" />
+
+              <path
+                  android:fillColor="#111A20"
+                  android:pathData="M18,35L27,23L81,23L90,35L90,78L80,88L28,88L18,78Z" />
+
+              <path
+                  android:fillColor="#22E676"
+                  android:pathData="M31,43L42,37L42,55L31,55Z" />
+
+              <path
+                  android:fillColor="#22E676"
+                  android:pathData="M66,37L77,43L77,55L66,55Z" />
+
+              <path
+                  android:fillColor="#B9C7C3"
+                  android:pathData="M43,69L54,60L65,69L54,77Z" />
+
+              <path
+                  android:fillColor="#22E676"
+                  android:pathData="M54,12L58,20L50,20Z" />
+
+              <path
+                  android:fillColor="#22E676"
+                  android:pathData="M51,15h6v12h-6z" />
+
+          </vector>
+          EOF
+
+      # --------------------------------------------------
+      # 10. Update application manifest
+      # --------------------------------------------------
+      - name: Set ApexPip launcher icon
+        run: |
+          MANIFEST="$APP_DIR/src/main/AndroidManifest.xml"
+
+          sed -i 's/android:icon="@drawable\/[^"]*"/android:icon="@drawable\/ic_apexpip_robot"/g' "$MANIFEST"
+          sed -i 's/android:roundIcon="@drawable\/[^"]*"/android:roundIcon="@drawable\/ic_apexpip_robot"/g' "$MANIFEST"
+
+      # --------------------------------------------------
+      # 11. Replace MainActivity with real-time version
+      # --------------------------------------------------
+      - name: Install ApexPip AI v3.0 MainActivity
+        run: |
+          MAIN=$(find "$APP_DIR/src/main/java" \
+            -name "MainActivity.kt" \
+            -type f \
+            | head -n 1)
+
+          if [ -z "$MAIN" ]; then
+            echo "ERROR: MainActivity.kt not found."
+            exit 1
+          fi
+
+          mkdir -p "$(dirname "$MAIN")"
+
+          cat > "$MAIN" <<'EOF'
+          package com.pippilot.ai
+
+          import android.graphics.Color
+          import android.os.Bundle
+          import android.view.Gravity
+          import android.view.ViewGroup
+          import android.widget.LinearLayout
+          import android.widget.ScrollView
+          import android.widget.TextView
+          import androidx.appcompat.app.AppCompatActivity
+          import okhttp3.OkHttpClient
+          import okhttp3.Request
+          import okhttp3.Response
+          import okhttp3.WebSocket
+          import okhttp3.WebSocketListener
+          import org.json.JSONObject
+          import java.text.DecimalFormat
+          import java.util.Calendar
+          import java.util.TimeZone
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var connectionText: TextView
+              private lateinit var marketText: TextView
+              private lateinit var priceText: TextView
+              private lateinit var signalText: TextView
+              private lateinit var detailsText: TextView
+
+              private val client = OkHttpClient()
+              private var socket: WebSocket? = null
+
+              private val prices = mutableMapOf<String, Double>()
+
+              private val formatter =
+                  DecimalFormat("0.00000")
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  createDashboard()
+                  updateMarketStatus()
+                  connectLiveMarket()
+              }
+
+              private fun createDashboard() {
+
+                  val scroll = ScrollView(this)
+
+                  val root = LinearLayout(this)
+                  root.orientation = LinearLayout.VERTICAL
+                  root.setPadding(28, 36, 28, 36)
+                  root.background =
+                      getDrawable(R.drawable.apexpip_background)
+
+                  scroll.addView(
+                      root,
+                      ViewGroup.LayoutParams(
+                          ViewGroup.LayoutParams.MATCH_PARENT,
+                          ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                  )
+
+                  val title = TextView(this)
+
+                  title.text = "ApexPip AI"
+                  title.textSize = 29f
+                  title.setTextColor(Color.WHITE)
+                  title.gravity = Gravity.CENTER
+                  title.setTypeface(null, 1)
+
+                  root.addView(
+                      title,
+                      LinearLayout.LayoutParams(
+                          -1,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+                  )
+
+                  val creator = TextView(this)
+
+                  creator.text = "Made by Thabiso Khutlane"
+                  creator.textSize = 13f
+                  creator.setTextColor(Color.LTGRAY)
+                  creator.gravity = Gravity.CENTER
+
+                  root.addView(creator)
+
+                  val subtitle = TextView(this)
+
+                  subtitle.text = "AI FOREX INTELLIGENCE"
+                  subtitle.textSize = 12f
+                  subtitle.setTextColor(
+                      Color.rgb(34, 230, 118)
+                  )
+                  subtitle.gravity = Gravity.CENTER
+
+                  root.addView(subtitle)
+
+                  connectionText =
+                      createCard(
+                          root,
+                          "📡 MARKET DATA",
+                          "CONNECTING..."
+                      )
+
+                  marketText =
+                      createCard(
+                          root,
+                          "🌐 MARKET STATUS",
+                          "CHECKING..."
+                      )
+
+                  priceText =
+                      createCard(
+                          root,
+                          "💱 EUR/USD",
+                          "Waiting for live price..."
+                      )
+
+                  signalText =
+                      createCard(
+                          root,
+                          "🤖 AI SIGNAL",
+                          "WAITING FOR MARKET DATA"
+                      )
+
+                  detailsText =
+                      createCard(
+                          root,
+                          "📊 ANALYSIS",
+                          "Live technical analysis will appear here."
+                      )
+
+                  val robot = createCard(
+                      root,
+                      "⚡ ROBOT CONTROL",
+                      "AI ENGINE READY"
+                  )
+
+                  robot.setOnClickListener {
+                      robot.text =
+                          if (robot.text.contains("READY"))
+                              "⚡ ROBOT CONTROL\nAI ENGINE ACTIVE"
+                          else
+                              "⚡ ROBOT CONTROL\nAI ENGINE READY"
+                  }
+
+                  val demo = createCard(
+                      root,
+                      "💰 DEMO ACCOUNT",
+                      "Balance: $10,000.00\nFloating P/L: $0.00"
+                  )
+
+                  demo.setOnClickListener {
+                      demo.text =
+                          "💰 DEMO ACCOUNT\nBalance: $10,000.00\nFloating P/L: $0.00"
+                  }
+
+                  setContentView(scroll)
+              }
+
+              private fun createCard(
+                  root: LinearLayout,
+                  title: String,
+                  value: String
+              ): TextView {
+
+                  val text = TextView(this)
+
+                  text.text =
+                      "$title\n$value"
+
+                  text.textSize = 16f
+                  text.setTextColor(Color.WHITE)
+                  text.setPadding(24, 24, 24, 24)
+
+                  val params =
+                      LinearLayout.LayoutParams(
+                          -1,
+                          ViewGroup.LayoutParams.WRAP_CONTENT
+                      )
+
+                  params.setMargins(0, 14, 0, 0)
+
+                  root.addView(text, params)
+
+                  return text
+              }
+
+              private fun connectLiveMarket() {
+
+                  /*
+                   * The API key is injected by the GitHub Actions
+                   * build from the TWELVE_DATA_API_KEY secret.
+                   */
+
+                  val apiKey =
+                      BuildConfig.TWELVE_DATA_API_KEY
+
+                  if (apiKey.isBlank()) {
+                      connectionText.text =
+                          "📡 MARKET DATA\nAPI KEY NOT CONFIGURED"
+                      return
+                  }
+
+                  val url =
+                      "wss://ws.twelvedata.com/v1/quotes/price?apikey=$apiKey"
+
+                  val request =
+                      Request.Builder()
+                          .url(url)
+                          .build()
+
+                  socket =
+                      client.newWebSocket(
+                          request,
+                          object : WebSocketListener() {
+
+                              override fun onOpen(
+                                  webSocket: WebSocket,
+                                  response: Response
+                              ) {
+
+                                  runOnUiThread {
+
+                                      connectionText.text =
+                                          "📡 MARKET DATA\n🟢 LIVE DATA CONNECTED"
+                                  }
+
+                                  val subscribe =
+                                      JSONObject()
+                                          .put("action", "subscribe")
+                                          .put(
+                                              "params",
+                                              JSONObject()
+                                                  .put(
+                                                      "symbols",
+                                                      "EUR/USD,GBP/USD,USD/JPY"
+                                                  )
+                                          )
+
+                                  webSocket.send(
+                                      subscribe.toString()
+                                  )
+                              }
+
+                              override fun onMessage(
+                                  webSocket: WebSocket,
+                                  text: String
+                              ) {
+
+                                  handleMarketMessage(text)
+                              }
+
+                              override fun onFailure(
+                                  webSocket: WebSocket,
+                                  t: Throwable,
+                                  response: Response?
+                              ) {
+
+                                  runOnUiThread {
+
+                                      connectionText.text =
+                                          "📡 MARKET DATA\n🔴 CONNECTION ERROR"
+                                  }
+                              }
+
+                              override fun onClosed(
+                                  webSocket: WebSocket,
+                                  code: Int,
+                                  reason: String
+                              ) {
+
+                                  runOnUiThread {
+
+                                      connectionText.text =
+                                          "📡 MARKET DATA\n🟠 CONNECTION CLOSED"
+                                  }
+                              }
+                          }
+                      )
+              }
+
+              private fun handleMarketMessage(
+                  message: String
+              ) {
+
+                  try {
+
+                      val json =
+                          JSONObject(message)
+
+                      if (
+                          !json.has("event") ||
+                          json.getString("event") != "price"
+                      ) {
+                          return
+                      }
+
+                      val symbol =
+                          json.optString("symbol")
+
+                      val price =
+                          json.optDouble("price", Double.NaN)
+
+                      if (
+                          symbol.isBlank() ||
+                          price.isNaN()
+                      ) {
+                          return
+                      }
+
+                      prices[symbol] = price
+
+                      runOnUiThread {
+
+                          if (symbol == "EUR/USD") {
+
+                              priceText.text =
+                                  "💱 EUR/USD\n" +
+                                  formatter.format(price)
+
+                              updateSignal(price)
+                          }
+                      }
+
+                  } catch (_: Exception) {
+                  }
+              }
+
+              private fun updateSignal(price: Double) {
+
+                  /*
+                   * v3.0 uses live market price.
+                   *
+                   * The signal shown here is intentionally
+                   * conservative until a candle-history engine
+                   * is connected. It must NOT pretend to have
+                   * technical confirmation it has not calculated.
+                   */
+
+                  signalText.text =
+                      "🤖 AI SIGNAL\n" +
+                      "WAIT — BUILDING LIVE DATA"
+
+                  detailsText.text =
+                      "📊 ANALYSIS\n" +
+                      "EUR/USD: ${formatter.format(price)}\n" +
+                      "Live tick received: YES\n" +
+                      "Technical confirmation: WAITING"
+              }
+
+              private fun updateMarketStatus() {
+
+                  val calendar =
+                      Calendar.getInstance(
+                          TimeZone.getTimeZone("UTC")
+                      )
+
+                  val day =
+                      calendar.get(Calendar.DAY_OF_WEEK)
+
+                  val hour =
+                      calendar.get(Calendar.HOUR_OF_DAY)
+
+                  /*
+                   * Approximate FX market schedule:
+                   *
+                   * Opens Sunday 22:00 UTC
+                   * Closes Friday 22:00 UTC
+                   *
+                   * Broker/exchange holidays can still differ.
+                   */
+
+                  val open =
+                      when (day) {
+
+                          Calendar.SUNDAY ->
+                              hour >= 22
+
+                          Calendar.MONDAY,
+                          Calendar.TUESDAY,
+                          Calendar.WEDNESDAY,
+                          Calendar.THURSDAY ->
+                              true
+
+                          Calendar.FRIDAY ->
+                              hour < 22
+
+                          else ->
+                              false
+                      }
+
+                  marketText.text =
+                      if (open)
+                          "🌐 MARKET STATUS\n🟢 MARKET OPEN"
+                      else
+                          "🌐 MARKET STATUS\n🔴 MARKET CLOSED"
+              }
+
+              override fun onDestroy() {
+
+                  socket?.close(
+                      1000,
+                      "App closed"
+                  )
+
+                  client.dispatcher.executorService.shutdown()
+
+                  super.onDestroy()
+              }
+          }
+          EOF
+
+      # --------------------------------------------------
+      # 12. Inject API key through BuildConfig
+      # --------------------------------------------------
+      - name: Configure secure market API key
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+        run: |
+          cat >> "$APP_DIR/build.gradle" <<'EOF'
+
+          android {
+              defaultConfig {
+                  buildConfigField "String", "TWELVE_DATA_API_KEY", "\"PLACEHOLDER_API_KEY\""
+              }
+
+              buildFeatures {
+                  buildConfig true
+              }
+          }
+          EOF
+
+          sed -i \
+            "s/PLACEHOLDER_API_KEY/$TWELVE_DATA_API_KEY/g" \
+            "$APP_DIR/build.gradle"
+
+      # --------------------------------------------------
+      # 13. Setup Java 17
+      # --------------------------------------------------
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # --------------------------------------------------
+      # 14. Setup Gradle
+      # --------------------------------------------------
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      # --------------------------------------------------
+      # 15. Find Gradle wrapper
+      # --------------------------------------------------
+      - name: Prepare Gradle
+        run: |
+          cd app_project
+
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            echo "GRADLE_CMD=./gradlew" >> "$GITHUB_ENV"
+          else
+            echo "GRADLE_CMD=gradle" >> "$GITHUB_ENV"
+          fi
+
+      # --------------------------------------------------
+      # 16. Build APK
+      # --------------------------------------------------
+      - name: Build ApexPip AI v3.0
+        working-directory: app_project
+        run: |
+          $GRADLE_CMD assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # --------------------------------------------------
+      # 17. Verify APK
+      # --------------------------------------------------
+      - name: Verify APK exists
+        run: |
+          echo "Searching for APK..."
+
+          find app_project/app/build/outputs \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          APK=$(find app_project/app/build/outputs \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: No APK was created."
+            exit 1
+          fi
+
+          echo "APK FOUND:"
+          echo "$APK"
+
+          mkdir -p release
+
+          cp "$APK" \
+            release/ApexPip-AI-v3.0.apk
+
+          ls -lh release/ApexPip-AI-v3.0.apk
+
+      # --------------------------------------------------
+      # 18. Upload workflow artifact
+      # --------------------------------------------------
+      - name: Upload ApexPip APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ApexPip-AI-v3.0
+          path: release/ApexPip-AI-v3.0.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # --------------------------------------------------
+      # 19. Create GitHub Release
+      # --------------------------------------------------
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v3.0"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists."
+            gh release delete "$TAG" --yes
+          fi
+
+          gh release create "$TAG" \
+            release/ApexPip-AI-v3.0.apk \
+            --title "ApexPip AI v3.0" \
+            --notes "ApexPip AI v3.0 - Real-Time Forex Intelligence
+
+          Made by Thabiso Khutlane
+
+          Features:
+          - Live forex market connection
+          - Real-time EUR/USD
+          - GBP/USD
+          - USD/JPY
+          - Automatic market status
+          - AI trading dashboard
+          - Demo trading interface
+          - Robot control
+          - Premium ApexPip AI branding"
