@@ -24,50 +24,84 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Locate Android project
+      - name: Find Android project ZIP
         shell: bash
         run: |
-          echo "Repository:"
-          pwd
-          echo ""
-          echo "Top-level files:"
-          find . -maxdepth 3 -type f | sort | head -300
-          echo ""
+          echo "Searching for Android project ZIP..."
 
-          GRADLEW=$(find . -type f -name "gradlew" \
-            -not -path "*/.git/*" \
+          ZIP_FILE=$(find . \
+            -maxdepth 2 \
+            -type f \
+            -name "*.zip" \
+            -not -path "./.git/*" \
+            | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file containing the Android project was found."
+            exit 1
+          fi
+
+          echo "ZIP found:"
+          echo "$ZIP_FILE"
+
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+      - name: Extract Android project
+        shell: bash
+        run: |
+          echo "Extracting Android project..."
+
+          mkdir -p android_project
+
+          unzip -o "$ZIP_FILE" -d android_project
+
+          echo ""
+          echo "Extracted files:"
+          find android_project -maxdepth 6 -type f \
+            -not -path "*/.gradle/*" \
+            | sort | head -500
+
+      - name: Locate Gradle project
+        shell: bash
+        run: |
+          echo "Searching for gradlew..."
+
+          GRADLEW=$(find android_project \
+            -type f \
+            -name "gradlew" \
+            -not -path "*/.gradle/*" \
             | head -n 1)
 
           if [ -z "$GRADLEW" ]; then
-            echo "ERROR: gradlew was not found."
+            echo "ERROR: gradlew was not found after extracting the ZIP."
             echo ""
-            echo "This repository does not appear to contain a Gradle Android project."
-            echo ""
-            echo "Searching for Gradle files:"
-            find . -type f \
-              \( -name "build.gradle" -o -name "build.gradle.kts" -o -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-              -not -path "*/.git/*" \
+            echo "Searching for Gradle configuration files..."
+
+            find android_project \
+              -type f \
+              \( \
+                -name "build.gradle" \
+                -o -name "build.gradle.kts" \
+                -o -name "settings.gradle" \
+                -o -name "settings.gradle.kts" \
+              \) \
+              -not -path "*/.gradle/*" \
               | sort
+
+            echo ""
+            echo "If the ZIP contains only source files and not a complete Gradle project,"
+            echo "the Android project will need to be completed."
+
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$GRADLEW")
 
-          echo "Android/Gradle project found:"
+          echo ""
+          echo "Gradle project found:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Show project structure
-        shell: bash
-        run: |
-          echo "Project directory: $PROJECT_DIR"
-          echo ""
-
-          find "$PROJECT_DIR" -maxdepth 6 -type f \
-            -not -path "*/.gradle/*" \
-            -not -path "*/build/*" \
-            | sort | head -400
 
       - name: Make Gradle executable
         run: |
@@ -87,8 +121,9 @@ jobs:
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             echo "WARNING: MainActivity.kt was not found."
+
             echo ""
-            echo "Kotlin files:"
+            echo "Kotlin source files:"
             find "$PROJECT_DIR" \
               -type f \
               -name "*.kt" \
@@ -98,9 +133,19 @@ jobs:
           else
             echo "MainActivity.kt found:"
             echo "$MAIN_ACTIVITY"
-
-            echo "MAIN_ACTIVITY=$MAIN_ACTIVITY" >> "$GITHUB_ENV"
           fi
+
+      - name: Show Android project structure
+        shell: bash
+        run: |
+          echo "Android project:"
+          echo "$PROJECT_DIR"
+          echo ""
+
+          find "$PROJECT_DIR" -maxdepth 7 -type f \
+            -not -path "*/.gradle/*" \
+            -not -path "*/build/*" \
+            | sort | head -500
 
       - name: Check Gradle
         run: |
@@ -114,7 +159,7 @@ jobs:
         run: |
           "$PROJECT_DIR/gradlew" assembleDebug --stacktrace
 
-      - name: Find APK
+      - name: Find generated APK
         shell: bash
         run: |
           echo "Searching for generated APK..."
@@ -127,16 +172,11 @@ jobs:
 
           if [ -z "$APK" ]; then
             echo "ERROR: No APK was generated."
-            echo ""
-            echo "Build files:"
-            find "$PROJECT_DIR" \
-              -type f \
-              -not -path "*/.gradle/*" \
-              | sort | tail -200
             exit 1
           fi
 
-          echo "APK found:"
+          echo ""
+          echo "APK successfully generated:"
           echo "$APK"
 
           mkdir -p artifacts
