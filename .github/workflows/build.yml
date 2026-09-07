@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build ApexPipAI Android APK
 
 on:
   workflow_dispatch:
@@ -18,64 +18,82 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Check repository structure
-        run: |
-          echo "Repository root:"
-          pwd
-          echo ""
-          echo "Files and folders:"
-          find . -maxdepth 3 -type f | sort | head -300
-
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Check Android project
-        working-directory: app_project
+      - name: Locate Android project
+        shell: bash
         run: |
-          echo "Android project found."
+          echo "Repository:"
+          pwd
           echo ""
-          echo "Project contents:"
-          find . -maxdepth 5 -type f \
-            -not -path "./.gradle/*" \
-            -not -path "./build/*" \
-            | sort | head -300
+          echo "Top-level files:"
+          find . -maxdepth 3 -type f | sort | head -300
+          echo ""
 
-      - name: Make Gradle wrapper executable
-        working-directory: app_project
-        run: |
-          if [ ! -f "./gradlew" ]; then
-            echo "ERROR: gradlew was not found in app_project."
+          GRADLEW=$(find . -type f -name "gradlew" \
+            -not -path "*/.git/*" \
+            | head -n 1)
+
+          if [ -z "$GRADLEW" ]; then
+            echo "ERROR: gradlew was not found."
             echo ""
-            echo "Contents of app_project:"
-            ls -la
+            echo "This repository does not appear to contain a Gradle Android project."
+            echo ""
+            echo "Searching for Gradle files:"
+            find . -type f \
+              \( -name "build.gradle" -o -name "build.gradle.kts" -o -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              -not -path "*/.git/*" \
+              | sort
             exit 1
           fi
 
-          chmod +x ./gradlew
+          PROJECT_DIR=$(dirname "$GRADLEW")
 
-      - name: Find MainActivity.kt
-        working-directory: app_project
+          echo "Android/Gradle project found:"
+          echo "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Show project structure
         shell: bash
         run: |
-          echo "Searching entire Android project for MainActivity.kt..."
+          echo "Project directory: $PROJECT_DIR"
+          echo ""
 
-          MAIN_ACTIVITY=$(find . \
+          find "$PROJECT_DIR" -maxdepth 6 -type f \
+            -not -path "*/.gradle/*" \
+            -not -path "*/build/*" \
+            | sort | head -400
+
+      - name: Make Gradle executable
+        run: |
+          chmod +x "$PROJECT_DIR/gradlew"
+
+      - name: Find MainActivity.kt
+        shell: bash
+        run: |
+          echo "Searching for MainActivity.kt..."
+
+          MAIN_ACTIVITY=$(find "$PROJECT_DIR" \
             -type f \
             -name "MainActivity.kt" \
-            -not -path "./.gradle/*" \
-            -not -path "./build/*" \
+            -not -path "*/.gradle/*" \
+            -not -path "*/build/*" \
             | head -n 1)
 
           if [ -z "$MAIN_ACTIVITY" ]; then
             echo "WARNING: MainActivity.kt was not found."
             echo ""
-            echo "Kotlin and Java source files found:"
-            find . -type f \
-              \( -name "*.kt" -o -name "*.java" \) \
-              -not -path "./.gradle/*" \
+            echo "Kotlin files:"
+            find "$PROJECT_DIR" \
+              -type f \
+              -name "*.kt" \
+              -not -path "*/.gradle/*" \
+              -not -path "*/build/*" \
               | sort
           else
             echo "MainActivity.kt found:"
@@ -85,38 +103,35 @@ jobs:
           fi
 
       - name: Check Gradle
-        working-directory: app_project
         run: |
-          ./gradlew --version
+          "$PROJECT_DIR/gradlew" --version
 
       - name: Clean project
-        working-directory: app_project
         run: |
-          ./gradlew clean --stacktrace
+          "$PROJECT_DIR/gradlew" clean --stacktrace
 
       - name: Build Debug APK
-        working-directory: app_project
         run: |
-          ./gradlew assembleDebug --stacktrace
+          "$PROJECT_DIR/gradlew" assembleDebug --stacktrace
 
-      - name: Find generated APK
-        working-directory: app_project
+      - name: Find APK
         shell: bash
         run: |
-          echo "Searching for APK..."
+          echo "Searching for generated APK..."
 
-          APK=$(find . \
+          APK=$(find "$PROJECT_DIR" \
             -type f \
             -name "*.apk" \
-            -not -path "./.gradle/*" \
+            -not -path "*/.gradle/*" \
             | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "ERROR: No APK was generated."
             echo ""
-            echo "Possible build outputs:"
-            find . -type f \
-              -not -path "./.gradle/*" \
+            echo "Build files:"
+            find "$PROJECT_DIR" \
+              -type f \
+              -not -path "*/.gradle/*" \
               | sort | tail -200
             exit 1
           fi
@@ -124,8 +139,8 @@ jobs:
           echo "APK found:"
           echo "$APK"
 
-          mkdir -p ../artifacts
-          cp "$APK" ../artifacts/ApexPipAI-debug.apk
+          mkdir -p artifacts
+          cp "$APK" artifacts/ApexPipAI-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v5
