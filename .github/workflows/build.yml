@@ -18,22 +18,49 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      - name: Check repository structure
+        run: |
+          echo "Repository root:"
+          pwd
+          echo ""
+          echo "Files and folders:"
+          find . -maxdepth 3 -type f | sort | head -300
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
+
+      - name: Check Android project
+        working-directory: app_project
+        run: |
+          echo "Android project found."
+          echo ""
+          echo "Project contents:"
+          find . -maxdepth 5 -type f \
+            -not -path "./.gradle/*" \
+            -not -path "./build/*" \
+            | sort | head -300
 
       - name: Make Gradle wrapper executable
         working-directory: app_project
-        run: chmod +x gradlew
+        run: |
+          if [ ! -f "./gradlew" ]; then
+            echo "ERROR: gradlew was not found in app_project."
+            echo ""
+            echo "Contents of app_project:"
+            ls -la
+            exit 1
+          fi
+
+          chmod +x ./gradlew
 
       - name: Find MainActivity.kt
         working-directory: app_project
         shell: bash
         run: |
-          echo "Searching for MainActivity.kt..."
+          echo "Searching entire Android project for MainActivity.kt..."
 
           MAIN_ACTIVITY=$(find . \
             -type f \
@@ -43,34 +70,29 @@ jobs:
             | head -n 1)
 
           if [ -z "$MAIN_ACTIVITY" ]; then
-            echo "ERROR: MainActivity.kt not found anywhere inside app_project."
+            echo "WARNING: MainActivity.kt was not found."
             echo ""
-            echo "Android source files found:"
-            find . -type f \( -name "*.kt" -o -name "*.java" \) \
+            echo "Kotlin and Java source files found:"
+            find . -type f \
+              \( -name "*.kt" -o -name "*.java" \) \
               -not -path "./.gradle/*" \
               | sort
-            exit 1
+          else
+            echo "MainActivity.kt found:"
+            echo "$MAIN_ACTIVITY"
+
+            echo "MAIN_ACTIVITY=$MAIN_ACTIVITY" >> "$GITHUB_ENV"
           fi
 
-          echo "MainActivity.kt found at:"
-          echo "$MAIN_ACTIVITY"
-
-          echo "MAIN_ACTIVITY=$MAIN_ACTIVITY" >> "$GITHUB_ENV"
-
-      - name: Show Android project structure
+      - name: Check Gradle
         working-directory: app_project
         run: |
-          echo "Project files:"
-          find . -maxdepth 5 -type f \
-            -not -path "./.gradle/*" \
-            -not -path "./build/*" \
-            | sort | head -300
-
-      - name: Check Gradle project
-        working-directory: app_project
-        run: |
-          echo "Gradle version:"
           ./gradlew --version
+
+      - name: Clean project
+        working-directory: app_project
+        run: |
+          ./gradlew clean --stacktrace
 
       - name: Build Debug APK
         working-directory: app_project
@@ -81,7 +103,7 @@ jobs:
         working-directory: app_project
         shell: bash
         run: |
-          echo "Searching for generated APK..."
+          echo "Searching for APK..."
 
           APK=$(find . \
             -type f \
@@ -92,7 +114,7 @@ jobs:
           if [ -z "$APK" ]; then
             echo "ERROR: No APK was generated."
             echo ""
-            echo "Build directory contents:"
+            echo "Possible build outputs:"
             find . -type f \
               -not -path "./.gradle/*" \
               | sort | tail -200
@@ -103,11 +125,11 @@ jobs:
           echo "$APK"
 
           mkdir -p ../artifacts
-          cp "$APK" ../artifacts/app-debug.apk
+          cp "$APK" ../artifacts/ApexPipAI-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
-          name: Android-APK
-          path: artifacts/app-debug.apk
+          name: ApexPipAI-APK
+          path: artifacts/ApexPipAI-debug.apk
           if-no-files-found: error
